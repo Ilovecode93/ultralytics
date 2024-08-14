@@ -10,7 +10,7 @@ from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigne
 
 from .metrics import bbox_iou, probiou
 from .tal import bbox2dist
-
+from ultralytics.utils.repulsion import repulsion_loss
 
 class VarifocalLoss(nn.Module):
     """
@@ -75,7 +75,11 @@ class BboxLoss(nn.Module):
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
         iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
-
+        # print("\n ----- anchor_points ---- ", anchor_points.shape)
+        # print("\n ----- anchor_points value ---- ", anchor_points)
+        # print("\n ----- target_bboxes ---- ", target_bboxes.shape)
+        # print("\n ----- pred_dist ---- ", pred_dist.shape)
+        # print("\n ----- pred_dist[fg_mask] ---- ", pred_dist[fg_mask].shape)
         # DFL loss
         if self.use_dfl:
             target_ltrb = bbox2dist(anchor_points, target_bboxes, self.reg_max)
@@ -83,7 +87,6 @@ class BboxLoss(nn.Module):
             loss_dfl = loss_dfl.sum() / target_scores_sum
         else:
             loss_dfl = torch.tensor(0.0).to(pred_dist.device)
-
         return loss_iou, loss_dfl
 
     @staticmethod
@@ -102,7 +105,6 @@ class BboxLoss(nn.Module):
             F.cross_entropy(pred_dist, tl.view(-1), reduction="none").view(tl.shape) * wl
             + F.cross_entropy(pred_dist, tr.view(-1), reduction="none").view(tl.shape) * wr
         ).mean(-1, keepdim=True)
-
 
 class RotatedBboxLoss(BboxLoss):
     """Criterion class for computing training losses during training."""
@@ -244,7 +246,8 @@ class v8DetectionLoss:
         loss[0] *= self.hyp.box  # box gain
         loss[1] *= self.hyp.cls  # cls gain
         loss[2] *= self.hyp.dfl  # dfl gain
-
+        loss[3], loss[4] = repulsion_loss(pred_bboxes, target_bboxes, fg_mask, sigma_regpt = 0.9, sigma_repbox = 0, pnms = 0, gtnms = 0)
+        
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
 
 
@@ -258,7 +261,7 @@ class v8SegmentationLoss(v8DetectionLoss):
 
     def __call__(self, preds, batch):
         """Calculate and return the loss for the YOLO model."""
-        loss = torch.zeros(4, device=self.device)  # box, cls, dfl
+        loss = torch.zeros(6, device=self.device)  # box, cls, dfl
         feats, pred_masks, proto = preds if len(preds) == 3 else preds[1]
         batch_size, _, mask_h, mask_w = proto.shape  # batch size, number of masks, mask height, mask width
         pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
@@ -327,11 +330,13 @@ class v8SegmentationLoss(v8DetectionLoss):
             loss[1] = self.calculate_segmentation_loss(
                 fg_mask, masks, target_gt_idx, target_bboxes, batch_idx, proto, pred_masks, imgsz, self.overlap
             )
+            loss[4], loss[5] = repulsion_loss(pred_bboxes, target_bboxes, fg_mask, sigma_regpt = 0.9, sigma_repbox = 0, pnms = 0, gtnms = 0)
+            loss[4] = loss[4] * 0.1 / 3.0 
+            loss[5] = loss[5] * 0.1 / 3.0
 
         # WARNING: lines below prevent Multi-GPU DDP 'unused gradient' PyTorch errors, do not remove
         else:
             loss[1] += (proto * 0).sum() + (pred_masks * 0).sum()  # inf sums may lead to nan loss
-
         loss[0] *= self.hyp.box  # box gain
         loss[1] *= self.hyp.box  # seg gain
         loss[2] *= self.hyp.cls  # cls gain

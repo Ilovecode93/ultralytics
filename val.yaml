@@ -1,0 +1,6 @@
+path: /media/deepl/8206e4e5-7eb6-48c5-969a-e61fbc5adff7/猪_测试集/labels/YOLODataset_seg
+train: images/train  # train images (relative to 'path') 128 images
+val:   images/val  # val images (relative to 'path') 128 images
+# Classes
+names:
+  0: pig
