@@ -40,7 +40,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Process a folder.')
     parser.add_argument('--input_folder', help='Path to the video file.')
-    model_path = "/home/deepl/ultralytics/712/weights/best.pt"
+    model_path = "/home/deepl/ultralytics_626/712_新loss/weights/best.pt"
     #model_path = '/home/deepl/usedlocated_ultralytics/smallpig_weights/1128/weights/best.pt'
     args = parser.parse_args()
     mid_name = model_path.split("/")[-3]
@@ -56,7 +56,7 @@ if __name__ == "__main__":
         tmp_frame = cv2.imread(full_path)
         img, pig_count, masked_img = pigcount(model_path, tmp_frame, pts)   
         print("pig_count: ", pig_count)
-        if pig_count != 23:
+        if pig_count != 12:
             cv2.imwrite("{}/{}_result.{}".format(prefix, i.split(".")[0], i.split(".")[1]), img)
             shutil.copy(full_path, "{}/{}".format(prefix, i))
             

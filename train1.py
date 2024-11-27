@@ -6,4 +6,4 @@
 from ultralytics import YOLO
 
 model = YOLO("yolov8n.pt")
-model.train(data="/home/deepl/ultralytics/ocr.v2i.yolov8/data.yaml", name = "814", epochs=100, batch=16, cache = True)
+model.train(data="/home/deepl/OCR_LABEL/ocr.v3i.yolov8/data.yaml", name = "1030", epochs=2, batch=16, cache = True)

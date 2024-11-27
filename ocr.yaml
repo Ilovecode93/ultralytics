@@ -1,0 +1,17 @@
+# path: /home/deepl/OCR_LABEL/ocr.v2i.yolov8
+# train: train/images  # train images (relative to 'path') 128 images
+# val:   valid/images  # val images (relative to 'path') 128 images
+# test:  # test images (optional)
+
+# # Classes
+# names:
+#   0: sign
+
+path: /media/deepl/8206e4e5-7eb6-48c5-969a-e61fbc5adff7/新场景_猪/YOLODataset_seg
+train: train/images  # train images (relative to 'path') 128 images
+val:   images/val  # val images (relative to 'path') 128 images
+test:  # test images (optional)
+
+# Classes
+names:
+  0: pig

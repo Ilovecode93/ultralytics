@@ -8,7 +8,7 @@ def pairwise_bbox_iou(box1, box2, box_format = 'xywh'):
         lt = torch.max(box1[:, None, :2], box2[:, :2])
         rb = torch.min(box1[:, None, 2:], box2[:, 2:])
         area_1 = torch.prod(box1[:, 2:] - box1[:, :2], 1)
-        area_2 = torch.prod(box1[:, 2:] - box1[:, :2], 1)
+        area_2 = torch.prod(box2[:, 2:] - box2[:, :2], 1)
     elif box_format == 'xywh':
         lt = torch.max(
             (box1[:, None, :2] - box1[:, None, :2] / 2),
@@ -120,10 +120,28 @@ def smooth_ln(x, deta=0.5):
 #                 ppiou[j, z] = 0
 #                 if(_gtbox_pos_cpu[j][0] == _gtbox_pos_cpu[z][0]) and (_gtbox_pos_cpu[j][1] == _gtbox_pos_cpu[z][1]) \
 #                     and (_gtbox_pos_cpue[j][2] == _gtbox_pose_cpu[z][2]) 
-                    
-def repulsion_loss(pbox, gtbox, fg_mask, sigma_regpt = 0.9, sigma_repbox = 0, pnms = 0, gtnms = 0):  # nms=0
+
+# 使用的loss，确实可以提升map                   
+def repulsion_loss_previous(pbox, gtbox, fg_mask, sigma_regpt = 0.9, sigma_repbox = 0, pnms = 0, gtnms = 0):  # nms=0
+    """
+    Repulsion Loss。
+
+    参数:
+        pbox (Tensor): 预测的边界框，形状为 (batch_size, num_boxes, 4)。
+        gtbox (Tensor): 地面真值边界框，形状为 (batch_size, num_boxes, 4)。
+        fg_mask (Tensor): 前景掩码，形状为 (batch_size, num_boxes)。
+        sigma_regpt (float): 回归损失的系数。
+        sigma_repbox (float): Repulsion Loss 的系数。
+        pnms (float): 预测框间 NMS 阈值。
+        gtnms (float): GT 框与预测框的 NMS 阈值。
+
+    返回:
+        loss_regpt (Tensor): 回归损失。
+        loss_repbox (Tensor): Repulsion Loss。
+    """
     loss_regpt = torch.zeros(1).to(pbox.device)
     loss_repbox = torch.zeros(1).to(pbox.device)
+    print("fg_mask: ", fg_mask)
     bbox_mask = fg_mask.unsqueeze(-1).repeat([1, 1, 4])
     bs = 0
     pbox = pbox.detach()
@@ -132,10 +150,14 @@ def repulsion_loss(pbox, gtbox, fg_mask, sigma_regpt = 0.9, sigma_repbox = 0, pn
         num_pos = bbox_mask[idx].sum()
         if num_pos <= 0:
             continue
-        _pbox_pos = torch.masked_select(pbox[idx], bbox_mask[idx]).reshape([-1, 4])
-        _gtbox_pos = torch.masked_select(gtbox[idx], bbox_mask[idx]).reshape([-1, 4])
+        # _pbox_pos = torch.masked_select(pbox[idx], bbox_mask[idx]).reshape([-1, 4])
+        # _gtbox_pos = torch.masked_select(gtbox[idx], bbox_mask[idx]).reshape([-1, 4])
+        _pbox_pos = pbox[idx][bbox_mask[idx]].reshape(-1, 4)
+        _gtbox_pos = gtbox[idx][bbox_mask[idx]].reshape(-1, 4)
         bs += 1
+        # 计算预测框与 GT 框的 IoU
         pgiou = pairwise_bbox_iou(_pbox_pos, _gtbox_pos, box_format='xyxy')
+        # 计算预测框之间的 的 IoU
         ppiou = pairwise_bbox_iou(_pbox_pos, _pbox_pos, box_format='xyxy')
         pgiou = pgiou.cuda().data.cpu().numpy()
         ppiou = ppiou.cuda().data.cpu().numpy()
@@ -164,8 +186,87 @@ def repulsion_loss(pbox, gtbox, fg_mask, sigma_regpt = 0.9, sigma_repbox = 0, pn
         pp_mask = torch.gt(ppiou, pnms)
         num_pbox = pp_mask.sum()
         if num_pbox > 0:
+            print("------- enter num_pbox -------------")
             loss_repbox += smooth_ln(ppiou, sigma_repbox).mean()
     loss_regpt /= bs
     loss_repbox /= bs
     torch.cuda.empty_cache()
+    return loss_regpt.squeeze(0), loss_repbox.squeeze(0)
+def repulsion_loss(pbox, gtbox, fg_mask, sigma_regpt=0.9, sigma_repbox=0, pnms=0, gtnms=0):
+    """
+    计算 Repulsion Loss。
+
+    参数:
+        pbox (Tensor): 预测的边界框，形状为 (batch_size, num_boxes, 4)。
+        gtbox (Tensor): 地面真值边界框，形状为 (batch_size, num_boxes, 4)。
+        fg_mask (Tensor): 前景掩码，形状为 (batch_size, num_boxes)。
+        sigma_regpt (float): 回归损失的系数。
+        sigma_repbox (float): Repulsion Loss 的系数。
+        pnms (float): 预测框间 NMS 阈值。
+        gtnms (float): GT 框与预测框的 NMS 阈值。
+
+    返回:
+        loss_regpt (Tensor): 回归损失。
+        loss_repbox (Tensor): Repulsion Loss。
+    """
+    device = pbox.device
+    loss_regpt = torch.zeros(1, device=device)
+    loss_repbox = torch.zeros(1, device=device)
+    bbox_mask = fg_mask.unsqueeze(-1).repeat(1, 1, 4)
+    bs = 0  # 有效批次数
+
+    # 不需要梯度
+    pbox = pbox.detach()
+    gtbox = gtbox.detach()
+
+    for idx in range(pbox.shape[0]):
+        num_pos = bbox_mask[idx].sum()
+        if num_pos <= 0:
+            continue
+
+        _pbox_pos = pbox[idx][bbox_mask[idx]].reshape(-1, 4)
+        _gtbox_pos = gtbox[idx][bbox_mask[idx]].reshape(-1, 4)
+        bs += 1
+
+        # 计算预测框与 GT 框的 IoU
+        pgiou = pairwise_bbox_iou(_pbox_pos, _gtbox_pos, box_format='xyxy')  # (N_p, N_gt)
+        # 计算预测框之间的 IoU
+        ppiou = pairwise_bbox_iou(_pbox_pos, _pbox_pos, box_format='xyxy')  # (N_p, N_p)
+
+        # 设置对角线为0，避免自身与自身的干扰
+        eye = torch.eye(ppiou.size(0), device=device)
+        ppiou = ppiou * (1 - eye)
+
+        # 找出完全相同的 GT 框并设置对应的 IoU 为0
+        # 假设 gtbox 格式为 [x1, y1, x2, y2]
+        gt_equal = ( _gtbox_pos.unsqueeze(1) == _gtbox_pos.unsqueeze(0) ).all(-1)
+        pgiou = pgiou * (~gt_equal).float()
+        ppiou = ppiou * (~gt_equal).float()
+
+        # 最大 IoU 和对应的 GT 框
+        max_iou, _ = pgiou.max(dim=1)
+        pg_mask = max_iou > gtnms
+        num_regpt = pg_mask.sum()
+
+        if num_regpt > 0:
+            pgiou_pos = pgiou[pg_mask]
+            _, argmax_iou_sec = pgiou_pos.max(dim=1)
+            pbox_sec = _pbox_pos[pg_mask]
+            gtbox_sec = _gtbox_pos[argmax_iou_sec]
+            IOG = IoG(gtbox_sec, pbox_sec)  # 需要定义 IoG
+            loss_regpt += smooth_ln(IOG, sigma_regpt).mean()
+
+        # Repulsion Loss: 预测框之间的 IoU
+        pp_mask = ppiou > pnms
+        num_pbox = pp_mask.sum()
+        if num_pbox > 0:
+            loss_repbox += smooth_ln(ppiou[pp_mask], sigma_repbox).mean()
+
+    if bs > 0:
+        loss_regpt /= bs
+        loss_repbox /= bs
+    else:
+        loss_regpt = torch.tensor(0.0, device=device)
+        loss_repbox = torch.tensor(0.0, device=device)
+
     return loss_regpt.squeeze(0), loss_repbox.squeeze(0)
